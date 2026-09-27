@@ -1,11 +1,25 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-import "os"
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io"
+	"log"
+	"net/rpc"
+	"os"
+	"sort"
+	"strconv"
+	"time"
+)
 
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -23,44 +37,131 @@ func ihash(key string) int {
 
 var coordSockName string // socket for coordinator
 
-
 // main/mrworker.go calls this function.
-func Worker(sockname string, mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func Worker(sockname string, mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
 	coordSockName = sockname
 
 	// Your worker implementation here.
+	for {
+		task := FetchTask()
+		switch task.TaskType {
+		case Map:
+			file, err := os.Open(task.FileName)
+			if err != nil {
+				log.Fatalf("Can not open file name %v %s", task.FileName, err)
+			}
+			content, err := io.ReadAll(file)
+			if err != nil {
+				log.Fatalf("Can not read file %v %s", task.FileName, err)
+			}
+			ikv := mapf(task.FileName, string(content))
+			part := make(map[int][]KeyValue)
+			for _, v := range ikv {
+				y := ihash(v.Key) % task.NReduce
+				part[y] = append(part[y], v)
+			}
+			for k, v := range part {
+				var mrxy = "mr-" + strconv.Itoa(task.TaskNumber) + "-" + strconv.Itoa(k)
+				mrFile, err := os.Create(mrxy)
+				if err != nil {
+					log.Fatalf("Cant open file %v", mrxy)
+				}
+				enc := json.NewEncoder(mrFile)
+				for _, v2 := range v {
+					_ = enc.Encode(&v2)
+				}
+				mrFile.Close()
+			}
+			OnMapTaskCompleted(os.Getpid(), task.FileName)
+		case Reduce:
+			kvi := make([]KeyValue, 0)
+			for i := 0; i < task.NMap; i++ {
+				fileName := "mr-" + strconv.Itoa(i) + "-" + strconv.Itoa(task.TaskNumber)
+				rmrFile, err := os.Open(fileName)
+				if err != nil {
+					// do nothing
+					// log.Printf("Can't read %v %s", fileName, err)
+				} else {
+					dec := json.NewDecoder(rmrFile)
+					for {
+						var kv KeyValue
+						if err := dec.Decode(&kv); err != nil {
+							break
+						}
+						kvi = append(kvi, kv)
+					}
+				}
+				// log.Printf("Completed reduce file %v", fileName)
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+			}
+			sort.Sort(ByKey(kvi))
+			oname := "mr-out-" + strconv.Itoa(task.TaskNumber)
+			ofile, _ := os.OpenFile(oname, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			i := 0
+			for i < len(kvi) {
+				j := i + 1
+				for j < len(kvi) && kvi[j].Key == kvi[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, kvi[k].Value)
+				}
+				output := reducef(kvi[i].Key, values)
+				fmt.Fprintf(ofile, "%v %v\n", kvi[i].Key, output)
+				i = j
+			}
+			ofile.Close()
+			OnReduceTaskCompleted(task.TaskNumber)
+		case Wait:
+			time.Sleep(2 * time.Second)
+			// log.Printf("[%v] Waiting ...", os.Getpid())
+		case Finished:
+			// log.Printf("[%v] Finished", os.Getpid())
+			return
+		}
+	}
 
 }
 
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
+func FetchTask() TaskReply {
+	args := TaskArgs{Pid: os.Getpid()}
+	reply := TaskReply{}
+	for range 3 {
+		ok := call("Coordinator.FetchTask", &args, &reply)
+		if ok {
+			return reply
+		} else {
+			log.Println("RPC call failed, rety")
+		}
+	}
 
-	// declare an argument structure.
-	args := ExampleArgs{}
+	log.Fatalln("Retried 3 times, can't reach the coodinator")
+	return TaskReply{TaskType: Finished}
+}
 
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
+func OnMapTaskCompleted(pid int, fileName string) TaskReportReply {
+	args := MapTaskReportArgs{Pid: pid, FileName: fileName}
+	reply := TaskReportReply{}
+	ok := call("Coordinator.OnMapTaskCompleted", &args, &reply)
 	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
+		return reply
 	} else {
-		fmt.Printf("call failed!\n")
+		log.Println("Failed to pass intermediate files")
+		return reply
+	}
+}
+
+func OnReduceTaskCompleted(taskNumber int) TaskReportReply {
+	args := ReduceTaskReportArgs{Pid: os.Getpid(), TaskNumber: taskNumber}
+	reply := TaskReportReply{}
+	ok := call("Coordinator.OnReduceTaskCompleted", &args, &reply)
+	if ok {
+		return reply
+	} else {
+		log.Println("Failed on OnReduceTaskCompleted")
+		return reply
 	}
 }
 

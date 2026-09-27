@@ -11,13 +11,39 @@ package mr
 // and reply for an RPC.
 //
 
-type ExampleArgs struct {
-	X int
+type TaskType int
+
+const (
+	Map TaskType = iota
+	Reduce
+	Wait
+	Finished
+)
+
+type TaskArgs struct {
+	Pid int
 }
 
-type ExampleReply struct {
-	Y int
+type TaskReply struct {
+	FileName   string
+	TaskType   TaskType
+	TaskNumber int
+	NReduce    int
+	NMap       int
+}
+
+type MapTaskReportArgs struct {
+	Pid      int
+	FileName string
+}
+
+type TaskReportReply struct {
+	Ok bool
+}
+
+type ReduceTaskReportArgs struct {
+	Pid        int
+	TaskNumber int
 }
 
 // Add your RPC definitions here.
-
