@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"6.5840/kvsrv1"
+	kvsrv "6.5840/kvsrv1"
 	"6.5840/kvsrv1/rpc"
-	"6.5840/kvtest1"
+	kvtest "6.5840/kvtest1"
 )
 
 const (
@@ -22,7 +22,7 @@ func TestReliableBasic(t *testing.T) {
 	ts := kvsrv.MakeTestKV(t, true)
 	defer ts.Cleanup()
 
-	ts.Begin(fmt.Sprintf("Test: a single Acquire and Release"))
+	ts.Begin("Test: a single Acquire and Release")
 
 	name1 := kvtest.RandValue(12)
 	ck := ts.MakeClerk()
@@ -37,7 +37,7 @@ func TestReliableNested(t *testing.T) {
 	ts := kvsrv.MakeTestKV(t, true)
 	defer ts.Cleanup()
 
-	ts.Begin(fmt.Sprintf("Test: one client, two locks"))
+	ts.Begin("Test: one client, two locks")
 
 	name1 := kvtest.RandValue(12)
 	name2 := kvtest.RandValue(12)
@@ -72,7 +72,7 @@ func oneClient(t *testing.T, me int, ck kvtest.IKVClerk,
 	for i := 1; true; i++ {
 		select {
 		case <-done:
-			return kvtest.ClntRes{i, 0}
+			return kvtest.ClntRes{Nok: i, Nmaybe: 0}
 		default:
 			lk1.Acquire()
 

@@ -1,11 +1,12 @@
 package kvsrv
 
 import (
-	"6.5840/kvsrv1/rpc"
-	"6.5840/kvtest1"
-	"6.5840/tester1"
-)
+	"time"
 
+	kvrpc "6.5840/kvsrv1/rpc"
+	kvtest "6.5840/kvtest1"
+	tester "6.5840/tester1"
+)
 
 type Clerk struct {
 	clnt   *tester.Clnt
@@ -14,7 +15,6 @@ type Clerk struct {
 
 func MakeClerk(clnt *tester.Clnt, server string) kvtest.IKVClerk {
 	ck := &Clerk{clnt: clnt, server: server}
-	// You may add code here.
 	return ck
 }
 
@@ -28,9 +28,16 @@ func MakeClerk(clnt *tester.Clnt, server string) kvtest.IKVClerk {
 // The types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
-func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
-	// You will have to modify this function.
-	return "", 0, rpc.ErrNoKey
+func (ck *Clerk) Get(key string) (string, kvrpc.Tversion, kvrpc.Err) {
+	args := kvrpc.GetArgs{Key: key}
+	for {
+		reply := kvrpc.GetReply{}
+		ok := ck.clnt.Call(ck.server, "KVServer.Get", &args, &reply)
+		if ok {
+			return reply.Value, reply.Version, reply.Err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // Put updates key with value only if the version in the
@@ -50,7 +57,19 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 // The types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
-func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
-	// You will have to modify this function.
-	return rpc.ErrNoKey
+func (ck *Clerk) Put(key, value string, version kvrpc.Tversion) kvrpc.Err {
+	args := kvrpc.PutArgs{Key: key, Value: value, Version: version}
+	reply := kvrpc.PutReply{}
+	retry := false
+	for {
+		ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
+		if ok {
+			if retry && reply.Err == kvrpc.ErrVersion {
+				return kvrpc.ErrMaybe
+			}
+			return reply.Err
+		}
+		time.Sleep(100 * time.Millisecond)
+		retry = true
+	}
 }
