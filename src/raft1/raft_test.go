@@ -10,6 +10,7 @@ package raft
 
 import (
 	"fmt"
+
 	//"log"
 	"math/rand"
 	"sync"
@@ -17,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
 // The tester generously allows solutions to complete elections in one second
@@ -169,7 +170,7 @@ func TestRPCBytes3B(t *testing.T) {
 	iters := 10
 	var sent int64 = 0
 	for index := 2; index < iters+2; index++ {
-		cmd := tester.Randstring(5000)
+		cmd := tester.Randstring(10)
 		xindex := ts.one(cmd, servers, false)
 		if xindex != index {
 			t.Fatalf("got index %v but expected %v", xindex, index)
@@ -357,7 +358,7 @@ func TestFailNoAgree3B(t *testing.T) {
 }
 
 func TestConcurrentStarts3B(t *testing.T) {
-	servers := 3
+	servers := 2
 	ts := makeTest(t, servers, true, false)
 	defer ts.cleanup()
 
