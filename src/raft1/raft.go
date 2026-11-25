@@ -11,6 +11,7 @@ import (
 	//	"bytes"
 
 	"bytes"
+	"fmt"
 	"log"
 	"math/rand"
 	"sync"
@@ -153,12 +154,12 @@ type AppendEntriesArgs struct {
 	LeaderCommit int
 }
 
-// func (a AppendEntriesArgs) String() string {
-// 	return fmt.Sprintf(
-// 		"AppendEntries{Term:%d LeaderId:%d PrevLogIndex:%d PrevLogTerm:%d Entries:%d LeaderCommit:%d}",
-// 		a.Term, a.LeaderId, a.PrevLogIndex, a.PrevLogTerm, len(a.Entries), a.LeaderCommit,
-// 	)
-// }
+func (a AppendEntriesArgs) String() string {
+	return fmt.Sprintf(
+		"AP{T:%d LI:%d PLI:%d PLT:%d Es:%d LC:%d}",
+		a.Term, a.LeaderId, a.PrevLogIndex, a.PrevLogTerm, a.Entries, a.LeaderCommit,
+	)
+}
 
 type AppendEntriesReply struct {
 	Term    int
@@ -213,6 +214,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, repl *AppendEntriesReply)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	// slog.Debug("AppendEntries", "me", rf.me, "term", rf.currentTerm, "args", args)
+	// log.Printf("[%v] Term %v; Args: %v", rf.me, rf.currentTerm, args)
 	if args.Term < rf.currentTerm {
 		repl.Term = rf.currentTerm
 		repl.Success = false
@@ -310,6 +312,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		}
 
 		go func(serverIdx int) {
+		retry:
 			rf.mu.Lock()
 			nextIndex := rf.nextIndexs[serverIdx]
 			lli := rf.getLastLogIndex()
@@ -329,17 +332,22 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 				}
 				repl := AppendEntriesReply{}
 				rf.mu.Unlock()
-				_ = rf.sendAppendEntries(serverIdx, &args, &repl)
-				rf.mu.Lock()
+				if ok := rf.sendAppendEntries(serverIdx, &args, &repl); !ok {
+					// ccould be retry on several times then give up or start a new follower?
+					return
+				}
 				// slog.Debug("Start", "me", rf.me, "term", rf.currentTerm, "to", serverIdx, "args", args, "repl", repl)
-				defer rf.mu.Unlock()
+				rf.mu.Lock()
+
 				if repl.Term > rf.currentTerm {
 					rf.toFollower(repl.Term)
+					rf.mu.Unlock()
 					// log.Printf("[%v] [Start] back to follower", rf.me)
 					return
 				}
 
 				if repl.Term != rf.currentTerm || rf.state != Leader {
+					rf.mu.Unlock()
 					return
 				}
 
@@ -350,25 +358,35 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 					}
 					rf.nextIndexs[serverIdx] = rf.matchIndexs[serverIdx] + 1
 					// log.Printf("[%v] -> [%v] mi %v ni %v", rf.me, serverIdx, rf.matchIndexs[serverIdx], rf.nextIndexs[serverIdx])
-				}
-				for i := rf.getLastLogIndex(); i > rf.commitIndex; i-- {
-					if rf.logs[i].Term != rf.currentTerm {
-						//never commits log entries from previous terms by counting replicas
-						break
-					}
-					c := 1
-					for k := range rf.peers {
-						if k != rf.me && rf.matchIndexs[k] >= i {
-							c++
+					for i := rf.getLastLogIndex(); i > rf.commitIndex; i-- {
+						if rf.logs[i].Term != rf.currentTerm {
+							//never commits log entries from previous terms by counting replicas
+							break
+						}
+						c := 1
+						for k := range rf.peers {
+							if k != rf.me && rf.matchIndexs[k] >= i {
+								c++
+							}
+						}
+						if c >= rf.getMajority() {
+							// log.Printf("[%v] term %v commit %v matchIndex %v log[i]=%v", rf.me, rf.currentTerm, i, rf.matchIndexs, rf.logs[i])
+							rf.commitIndex = i
+							// log.Printf("Found commitIndex %v", rf.commitIndex)
+							break
 						}
 					}
-					if c >= rf.getMajority() {
-						// log.Printf("[%v] term %v commit %v matchIndex %v log[i]=%v", rf.me, rf.currentTerm, i, rf.matchIndexs, rf.logs[i])
-						rf.commitIndex = i
-						// log.Printf("Found commitIndex %v", rf.commitIndex)
-						break
+				} else {
+					// log.Printf("[%v] -> [%v] Args %v; Repl %v", rf.me, serverIdx, args, repl)
+					newNexIdx := args.PrevLogIndex
+					if newNexIdx > 0 {
+						rf.nextIndexs[serverIdx] = newNexIdx
+						rf.mu.Unlock()
+						goto retry
 					}
 				}
+				rf.mu.Unlock()
+
 			}
 
 		}(k)
@@ -452,7 +470,7 @@ func (rf *Raft) electLeader() {
 
 				if votes >= rf.getMajority() {
 					rf.state = Leader
-					// log.Printf("Leader is %v", rf.me)
+					log.Printf("Leader is %v", rf.me)
 					for i := range rf.peers {
 						rf.nextIndexs[i] = rf.getLastLogIndex() + 1
 						rf.matchIndexs[i] = 0
@@ -543,7 +561,7 @@ var logOnce sync.Once
 // for any long-running work.
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *tester.Persister, applyCh chan raftapi.ApplyMsg) raftapi.Raft {
-	logOnce.Do(initLogger)
+	// logOnce.Do(initLogger)
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister

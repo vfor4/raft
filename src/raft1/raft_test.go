@@ -10,6 +10,7 @@ package raft
 
 import (
 	"fmt"
+	"log"
 
 	//"log"
 	"math/rand"
@@ -284,6 +285,7 @@ func TestFailAgree3B(t *testing.T) {
 	leader := ts.checkOneLeader()
 	ts.g.DisconnectAll((leader + 1) % servers)
 	tester.AnnotateConnection(ts.g.GetConnected())
+	log.Printf("Disconnect server %v", (leader+1)%servers)
 
 	// the leader and remaining follower should be
 	// able to agree despite the disconnected follower.
@@ -296,6 +298,7 @@ func TestFailAgree3B(t *testing.T) {
 	// re-connect
 	ts.g.ConnectOne((leader + 1) % servers)
 	tester.AnnotateConnection(ts.g.GetConnected())
+	log.Printf("Reconnect server %v", (leader+1)%servers)
 
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
